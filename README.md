@@ -1,3 +1,5 @@
+![Header](./llama-php.png)
+
 # llama.php
 
 **llama.php** is a robust, modular, and productive PHP wrapper for executing local Large Language Models (LLMs) using `llama.cpp` as the low-level inference engine. It provides a clean, secure API similar to OpenAI or Hugging Face, but 100% offline and self-contained.
