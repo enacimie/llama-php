@@ -1,3 +1,12 @@
+<div align="center">
+
+[![Follow me on HF](https://huggingface.co/datasets/huggingface/badges/resolve/main/follow-me-on-HF-sm-dark.svg)](https://huggingface.co/enacimie)
+
+[![Open in Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm-dark.svg)](https://huggingface.co/spaces/enacimie/llama-php)
+
+</div>
+
+
 ![Header](./llama-php.png)
 
 # llama.php
