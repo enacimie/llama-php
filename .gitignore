@@ -1,0 +1,34 @@
+# Dependencies
+/vendor/
+composer.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Tests
+/tests/dummy_llama
+/tests/dummy_model.gguf
+
+# Local configuration
+.env
+.phpunit.result.cache
+
+# llama.cpp submodule (should be installed separately)
+/llama.cpp/
+
+# Model files (large GGUF files)
+/models/*.gguf
+!/models/.gitkeep
+
+# PHPUnit cache
+.phpunit.cache/

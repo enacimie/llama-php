@@ -1,0 +1,770 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * llama.php CLI - Interactive interface for local LLMs
+ *
+ * Usage:
+ *   ./bin/llama generate --model /path/to/model.gguf --prompt "Hello"
+ *   ./bin/llama chat --model /path/to/model.gguf --system "You are helpful"
+ *   ./bin/llama embed --model /path/to/model.gguf --text "Embed this"
+ *   ./bin/llama interactive --model /path/to/model.gguf
+ *
+ * Author: Eduardo Nacimiento-García <enacimie@ull.edu.es>
+ */
+
+require_once __DIR__ . '/../vendor/autoload.php';
+
+use Llama\Llama;
+use Llama\Chat;
+use Llama\Embedding;
+use Llama\Templates\BaseTemplate;
+use Llama\Templates\Llama3Template;
+use Llama\Templates\Phi2Template;
+use Llama\Templates\MistralTemplate;
+use Llama\Templates\ZephyrTemplate;
+use Llama\Templates\QwenTemplate;
+use Llama\Templates\Qwen3Template;
+use Llama\Templates\DeepSeekTemplate;
+use Llama\Templates\GemmaTemplate;
+use Llama\Templates\ChatMLTemplate;
+use Llama\Templates\FalconTemplate;
+use Llama\Templates\CommandRTemplate;
+use Llama\Templates\VicunaTemplate;
+
+class LlamaCli
+{
+    private array $config = [
+        'binary' => null,
+        'model' => null,
+        'template' => null,
+        'thinking' => false,
+        'timeout' => 60,
+        'max_tokens' => 128,
+        'temperature' => 0.8,
+        'top_p' => 0.9,
+        'repeat_penalty' => 1.1,
+        'ctx_size' => 512,
+        'threads' => null,
+        'seed' => null,
+    ];
+
+    public function __construct()
+    {
+        // Try to find llama.cpp binary in common locations
+        $this->config['binary'] = $this->findLlamaBinary();
+    }
+
+    public function run(array $argv): void
+    {
+        $command = $argv[1] ?? null;
+
+        if (!$command || in_array($command, ['-h', '--help', 'help'])) {
+            $this->showHelp();
+            exit(0);
+        }
+
+        // Parse global options first
+        $options = $this->parseOptions(array_slice($argv, 1));
+
+        // Set config from options
+        foreach ($options as $key => $value) {
+            if (array_key_exists($key, $this->config)) {
+                $this->config[$key] = $value;
+            }
+        }
+
+        // Execute command
+        switch ($command) {
+            case 'generate':
+                $this->commandGenerate($options);
+                break;
+            case 'chat':
+                $this->commandChat($options);
+                break;
+            case 'embed':
+                $this->commandEmbed($options);
+                break;
+            case 'interactive':
+                $this->commandInteractive($options);
+                break;
+            case 'install':
+                $this->commandInstall($options);
+                break;
+            case 'download':
+                $this->commandDownload($options);
+                break;
+            default:
+                $this->error("Unknown command: $command");
+        }
+    }
+
+    private function commandGenerate(array $options): void
+    {
+        if (empty($this->config['model'])) {
+            $this->error("Model path is required. Use --model /path/to/model.gguf");
+        }
+        if (empty($options['prompt'])) {
+            $this->error("Prompt is required for generation. Use --prompt \"Your prompt\"");
+        }
+
+        $llama = $this->createLlama();
+        $generationOptions = $this->buildGenerationOptions();
+
+        echo "Generating...\n";
+        $start = microtime(true);
+        $result = $llama->generate($options['prompt'], $generationOptions);
+        $time = microtime(true) - $start;
+
+        echo "\n" . str_repeat('=', 60) . "\n";
+        echo "Result:\n";
+        echo $result . "\n";
+        echo str_repeat('=', 60) . "\n";
+        printf("Generated in %.2f seconds\n", $time);
+    }
+
+    private function commandChat(array $options): void
+    {
+        if (empty($this->config['model'])) {
+            $this->error("Model path is required. Use --model /path/to/model.gguf");
+        }
+        $messages = [];
+
+        // System message
+        if (!empty($options['system'])) {
+            $messages[] = ['role' => 'system', 'content' => $options['system']];
+        }
+
+        // User message (required)
+        if (empty($options['prompt'])) {
+            $this->error("Prompt is required for chat. Use --prompt \"Your message\"");
+        }
+        $messages[] = ['role' => 'user', 'content' => $options['prompt']];
+
+        $chat = $this->createChat();
+        $generationOptions = $this->buildGenerationOptions();
+
+        echo "Chatting...\n";
+        $start = microtime(true);
+        $response = $chat->chat($messages, $generationOptions);
+        $time = microtime(true) - $start;
+
+        echo "\n" . str_repeat('=', 60) . "\n";
+        echo "Assistant:\n";
+        echo $response . "\n";
+        echo str_repeat('=', 60) . "\n";
+        printf("Response in %.2f seconds\n", $time);
+    }
+
+    private function commandEmbed(array $options): void
+    {
+        if (empty($this->config['model'])) {
+            $this->error("Model path is required. Use --model /path/to/model.gguf");
+        }
+        if (empty($options['text'])) {
+            $this->error("Text is required for embedding. Use --text \"Text to embed\"");
+        }
+
+        $embedding = $this->createEmbedding();
+        $embedOptions = [
+            'timeout' => $this->config['timeout'],
+            'threads' => $this->config['threads'],
+            'ctx_size' => $this->config['ctx_size'],
+        ];
+
+        echo "Generating embedding...\n";
+        $start = microtime(true);
+        $vector = $embedding->embed($options['text'], $embedOptions);
+        $time = microtime(true) - $start;
+
+        echo "\n" . str_repeat('=', 60) . "\n";
+        echo "Embedding dimension: " . count($vector) . "\n";
+        echo "First 10 values:\n";
+        for ($i = 0; $i < min(10, count($vector)); $i++) {
+            printf("%.6f ", $vector[$i]);
+        }
+        echo "\n...\n";
+        echo str_repeat('=', 60) . "\n";
+        printf("Generated in %.2f seconds\n", $time);
+    }
+
+    private function commandInteractive(array $options): void
+    {
+        if (empty($this->config['model'])) {
+            $this->error("Model path is required. Use --model /path/to/model.gguf");
+        }
+        $chat = $this->createChat();
+        $generationOptions = $this->buildGenerationOptions();
+
+        $system = $options['system'] ?? 'You are a helpful assistant.';
+        $messages = [['role' => 'system', 'content' => $system]];
+
+        echo "Interactive Chat Mode\n";
+        echo "Model: " . basename($this->config['model']) . "\n";
+        echo "System: $system\n";
+        echo "Type '/exit' to quit, '/clear' to clear history, '/system <message>' to change system\n";
+        echo str_repeat('-', 60) . "\n";
+
+        while (true) {
+            echo "\nYou: ";
+            $input = trim(fgets(STDIN));
+
+            if ($input === '/exit') {
+                echo "Goodbye!\n";
+                break;
+            }
+
+            if ($input === '/clear') {
+                $messages = [['role' => 'system', 'content' => $system]];
+                echo "History cleared.\n";
+                continue;
+            }
+
+            if (str_starts_with($input, '/system ')) {
+                $system = substr($input, 8);
+                $messages = [['role' => 'system', 'content' => $system]];
+                echo "System message updated.\n";
+                continue;
+            }
+
+            if (empty($input)) {
+                continue;
+            }
+
+            $messages[] = ['role' => 'user', 'content' => $input];
+
+            echo "Assistant: ";
+            $start = microtime(true);
+            $response = $chat->chat($messages, $generationOptions);
+            $time = microtime(true) - $start;
+
+            echo $response . "\n";
+            printf("(%.2fs)\n", $time);
+
+            $messages[] = ['role' => 'assistant', 'content' => $response];
+        }
+    }
+
+    private function createLlama(): Llama
+    {
+        if (empty($this->config['binary'])) {
+            $this->error("llama.cpp binary not found. Specify with --binary /path/to/llama-cli");
+        }
+        if (!file_exists($this->config['binary'])) {
+            $this->error("Binary not found: " . $this->config['binary']);
+        }
+        if (!file_exists($this->config['model'])) {
+            $this->error("Model file not found: " . $this->config['model']);
+        }
+
+        return new Llama($this->config['binary'], $this->config['model']);
+    }
+
+    private function createChat(): Chat
+    {
+        $llama = $this->createLlama();
+        $template = $this->config['template'] ? $this->createTemplate($this->config['template']) : null;
+        return new Chat($this->config['binary'], $this->config['model'], $template);
+    }
+
+    private function createEmbedding(): Embedding
+    {
+        $llama = $this->createLlama();
+        return new Embedding($this->config['binary'], $this->config['model']);
+    }
+
+    private function createTemplate(string $templateName): BaseTemplate
+    {
+        $template = match(strtolower($templateName)) {
+            'llama3' => new Llama3Template(),
+            'phi2' => new Phi2Template(),
+            'mistral' => new MistralTemplate(),
+            'zephyr' => new ZephyrTemplate(),
+            'qwen' => new QwenTemplate(),
+            'qwen3' => new Qwen3Template(),
+            'deepseek' => new DeepSeekTemplate(),
+            'gemma' => new GemmaTemplate(),
+            'chatml' => new ChatMLTemplate(),
+            'falcon' => new FalconTemplate(),
+            'commandr' => new CommandRTemplate(),
+            'vicuna' => new VicunaTemplate(),
+            default => throw new InvalidArgumentException("Unknown template: $templateName")
+        };
+
+        // Apply thinking mode if requested and template supports it
+        if ($this->config['thinking'] && $template instanceof Qwen3Template) {
+            $template->setThinkingMode(true);
+        }
+
+        return $template;
+    }
+
+    private function buildGenerationOptions(): array
+    {
+        $options = [];
+        $keys = ['max_tokens', 'temperature', 'top_p', 'repeat_penalty', 'ctx_size', 'timeout', 'threads', 'seed'];
+        foreach ($keys as $key) {
+            if ($this->config[$key] !== null) {
+                $options[$key] = $this->config[$key];
+            }
+        }
+        return $options;
+    }
+
+    private function parseOptions(array $args): array
+    {
+        $options = [];
+        $currentKey = null;
+
+        foreach ($args as $arg) {
+            if (str_starts_with($arg, '--')) {
+                // Long option
+                $eqPos = strpos($arg, '=');
+                if ($eqPos !== false) {
+                    $key = substr($arg, 2, $eqPos - 2);
+                    $value = substr($arg, $eqPos + 1);
+                    $options[$key] = $value;
+                    $currentKey = null;
+                } else {
+                    $key = substr($arg, 2);
+                    $options[$key] = true;
+                    $currentKey = $key;
+                }
+            } elseif (str_starts_with($arg, '-')) {
+                // Short option (single letter)
+                $key = substr($arg, 1);
+                $options[$key] = true;
+                $currentKey = $key;
+            } elseif ($currentKey !== null) {
+                // Value for previous option
+                $options[$currentKey] = $arg;
+                $currentKey = null;
+            } else {
+                // Standalone argument (command already processed)
+            }
+        }
+
+        return $options;
+    }
+
+    private function findLlamaBinary(): ?string
+    {
+        $possiblePaths = [
+            '/usr/local/bin/llama-cli',
+            '/usr/bin/llama-cli',
+            '/opt/llama.cpp/llama-cli',
+            getenv('HOME') . '/.local/bin/llama-cli',
+            getenv('HOME') . '/llama.cpp/llama-cli',
+            getenv('HOME') . '/llama.cpp/main',
+            './llama-cli',
+            './main',
+        ];
+
+        foreach ($possiblePaths as $path) {
+            if (file_exists($path) && is_executable($path)) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    private function commandInstall(array $options): void
+    {
+        echo "llama.cpp Installation Helper\n";
+        echo "==============================\n";
+        // Check if llama-cli already exists
+        $binary = $this->findLlamaBinary();
+        if ($binary !== null) {
+            echo "✓ llama.cpp binary found at: $binary\n";
+            echo "You can use it with --binary $binary\n";
+            return;
+        }
+        echo "No llama.cpp binary found.\n";
+        echo "llama.php requires llama.cpp (llama-cli or main binary) to run.\n";
+        echo "You can install it manually:\n";
+        echo "  1. Clone repository: git clone https://github.com/ggerganov/llama.cpp\n";
+        echo "  2. cd llama.cpp && make\n";
+        echo "  3. The binary will be at ./llama-cli or ./main\n";
+        echo "\nDo you want to install llama.cpp automatically? (y/N): ";
+        $answer = trim(fgets(STDIN));
+        if (strtolower($answer) === 'y') {
+            $this->installLlamaCpp();
+        } else {
+            echo "Installation cancelled.\n";
+        }
+    }
+
+    private function installLlamaCpp(): void
+    {
+        echo "Installing llama.cpp...\n";
+        $cwd = getcwd();
+        $targetDir = $cwd . '/llama.cpp';
+        if (file_exists($targetDir)) {
+            echo "Directory llama.cpp already exists. Remove it first.\n";
+            return;
+        }
+        echo "Cloning repository...\n";
+        exec('git clone https://github.com/ggerganov/llama.cpp 2>&1', $output, $exitCode);
+        if ($exitCode !== 0) {
+            echo "Failed to clone repository. Make sure git is installed.\n";
+            return;
+        }
+        echo "Compiling... (this may take a few minutes)\n";
+        chdir('llama.cpp');
+        
+        // Try CMake build (modern way)
+        exec('cmake -B build 2>&1', $output, $exitCode);
+        if ($exitCode === 0) {
+            echo "CMake configuration successful. Building...\n";
+            exec('cmake --build build --config Release -j 4 2>&1', $output, $exitCode);
+        } else {
+            // Fallback to make (legacy, though Makefile now errors out, some forks might still have it)
+            echo "CMake failed, trying Make...\n";
+            exec('make -j 4 2>&1', $output, $exitCode);
+        }
+
+        if ($exitCode !== 0) {
+            echo "Compilation failed. Output:\n" . implode("\n", array_slice($output, -10)) . "\n";
+            echo "You may need to install cmake, make and g++.\n";
+            chdir($cwd);
+            return;
+        }
+        chdir($cwd);
+        
+        // Check for binary in standard locations
+        $possibleBinaries = [
+            'llama.cpp/build/bin/llama-cli', // CMake default
+            'llama.cpp/llama-cli',           // Make default
+            'llama.cpp/main',                // Old Make default
+        ];
+        
+        $binary = null;
+        foreach ($possibleBinaries as $p) {
+            if (file_exists($p)) {
+                $binary = $p;
+                break;
+            }
+        }
+
+        if ($binary) {
+            echo "✓ Successfully compiled llama.cpp. Binary at: $binary\n";
+            echo "You can now use --binary $binary\n";
+        } else {
+            echo "Compilation succeeded but binary not found in expected paths.\n";
+        }
+    }
+
+    private function commandDownload(array $options): void
+    {
+        if (empty($options['repo'])) {
+            $this->error("Repository is required. Use --repo owner/model-name");
+        }
+
+        $repo = $options['repo'];
+        $file = $options['file'] ?? null;
+        $outputDir = $options['output'] ?? getcwd();
+        $token = $options['token'] ?? null;
+        $listOnly = isset($options['list']) ? (bool)$options['list'] : false;
+
+        // Ensure output directory exists
+        if (!is_dir($outputDir)) {
+            mkdir($outputDir, 0755, true);
+        }
+
+        echo "Repository: $repo\n";
+
+        // Check if repo is from Hugging Face or ModelScope
+        if (str_contains($repo, 'huggingface.co') || str_contains($repo, 'hf.co')) {
+            $this->downloadFromHuggingFace($repo, $file, $outputDir, $token, $listOnly);
+        } elseif (str_contains($repo, 'modelscope.cn')) {
+            $this->downloadFromModelScope($repo, $file, $outputDir, $listOnly);
+        } else {
+            // Assume Hugging Face by default
+            $this->downloadFromHuggingFace($repo, $file, $outputDir, $token, $listOnly);
+        }
+    }
+
+    private function downloadFromHuggingFace(string $repo, ?string $file, string $outputDir, ?string $token, bool $listOnly): void
+    {
+        echo "Fetching file list from Hugging Face...\n";
+
+        // Clean repo name (remove URL parts)
+        $repo = preg_replace('#^https?://(www\.)?huggingface\.co/#', '', $repo);
+        $repo = preg_replace('#^hf\.co/#', '', $repo);
+
+        $apiUrl = "https://huggingface.co/api/models/$repo/tree/main";
+        $headers = [];
+        if ($token) {
+            $headers[] = "Authorization: Bearer $token";
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'header' => implode("\r\n", $headers),
+                'timeout' => 30,
+            ],
+        ]);
+
+        $json = @file_get_contents($apiUrl, false, $context);
+        if ($json === false) {
+            $this->error("Failed to fetch repository info. Check repository name and token if needed.");
+        }
+
+        $files = json_decode($json, true);
+        if (!is_array($files)) {
+            $this->error("Invalid response from Hugging Face API.");
+        }
+
+        // Filter GGUF files
+        $ggufFiles = array_filter($files, function($item) {
+            return isset($item['type']) && $item['type'] === 'file' &&
+                   isset($item['path']) && preg_match('/\.gguf$/i', $item['path']);
+        });
+
+        if (empty($ggufFiles)) {
+            echo "No GGUF files found in repository.\n";
+            echo "Available files:\n";
+            foreach ($files as $item) {
+                if ($item['type'] === 'file') {
+                    $size = isset($item['size']) ? $this->formatBytes($item['size']) : 'unknown';
+                    echo "  - {$item['path']} ($size)\n";
+                }
+            }
+            exit(1);
+        }
+
+        if ($listOnly) {
+            echo "Available GGUF files in $repo:\n";
+            foreach ($ggufFiles as $item) {
+                $size = isset($item['size']) ? $this->formatBytes($item['size']) : 'unknown';
+                $lfs = isset($item['lfs']) ? ' (LFS)' : '';
+                echo "  - {$item['path']} ($size$lfs)\n";
+            }
+            return;
+        }
+
+        if ($file === null) {
+            // If no file specified, show list and ask
+            echo "Multiple GGUF files found. Please specify one with --file:\n";
+            foreach ($ggufFiles as $item) {
+                $size = isset($item['size']) ? $this->formatBytes($item['size']) : 'unknown';
+                $lfs = isset($item['lfs']) ? ' (LFS)' : '';
+                echo "  - {$item['path']} ($size$lfs)\n";
+            }
+            exit(1);
+        }
+
+        // Find the requested file
+        $selectedFile = null;
+        foreach ($ggufFiles as $item) {
+            if ($item['path'] === $file || basename($item['path']) === $file) {
+                $selectedFile = $item;
+                break;
+            }
+        }
+
+        if ($selectedFile === null) {
+            $this->error("File '$file' not found in repository.");
+        }
+
+        $downloadUrl = "https://huggingface.co/$repo/resolve/main/{$selectedFile['path']}";
+        $outputPath = rtrim($outputDir, '/') . '/' . basename($selectedFile['path']);
+
+        echo "Downloading: {$selectedFile['path']}\n";
+        echo "Size: " . (isset($selectedFile['size']) ? $this->formatBytes($selectedFile['size']) : 'unknown') . "\n";
+        echo "To: $outputPath\n";
+
+        $this->downloadFile($downloadUrl, $outputPath, $token);
+
+        echo "✓ Download completed: $outputPath\n";
+    }
+
+    private function downloadFromModelScope(string $repo, ?string $file, string $outputDir, bool $listOnly): void
+    {
+        echo "ModelScope download not yet implemented. Please use Hugging Face for now.\n";
+        echo "Repository: $repo\n";
+        exit(1);
+    }
+
+    private function downloadFile(string $url, string $outputPath, ?string $token = null): void
+    {
+        $headers = [];
+        if ($token) {
+            $headers[] = "Authorization: Bearer $token";
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'header' => implode("\r\n", $headers),
+                'timeout' => 300,
+            ],
+        ]);
+
+        $in = @fopen($url, 'rb', false, $context);
+        if ($in === false) {
+            $this->error("Failed to open download URL: $url");
+        }
+
+        $out = fopen($outputPath, 'wb');
+        if ($out === false) {
+            fclose($in);
+            $this->error("Failed to open output file: $outputPath");
+        }
+
+        // Get file size from headers if available
+        $fileSize = 0;
+        $meta = stream_get_meta_data($in);
+        if (isset($meta['wrapper_data'])) {
+            foreach ($meta['wrapper_data'] as $header) {
+                if (preg_match('/Content-Length:\s*(\d+)/i', $header, $matches)) {
+                    $fileSize = (int)$matches[1];
+                    // Do not break; keep looking for the last Content-Length in case of redirects
+                }
+            }
+        }
+
+        $downloaded = 0;
+        $chunkSize = 8192;
+        $lastProgress = 0;
+
+        while (!feof($in)) {
+            $buffer = fread($in, $chunkSize);
+            if ($buffer === false) {
+                break;
+            }
+            $bytes = fwrite($out, $buffer);
+            if ($bytes === false) {
+                break;
+            }
+            $downloaded += $bytes;
+
+            // Show progress
+            if ($fileSize > 0) {
+                // If downloaded > fileSize, it implies fileSize was likely the LFS pointer size (small)
+                // and we are downloading the real file. In this case, update fileSize to show meaningful progress/size.
+                if ($downloaded > $fileSize && $fileSize < 100000) { // arbitrary threshold for pointer file
+                     $fileSize = 0; // Switch to unknown size mode temporarily or just don't show percentage
+                }
+
+                if ($fileSize > 0) {
+                    $progress = (int)(($downloaded / $fileSize) * 100);
+                    if ($progress >= $lastProgress + 5) {
+                        echo "Progress: $progress% (" . $this->formatBytes($downloaded) . " / " . $this->formatBytes($fileSize) . ")\n";
+                        $lastProgress = $progress;
+                    }
+                } else {
+                     if ($downloaded >= $lastProgress + 1024 * 1024) {
+                        echo "Downloaded: " . $this->formatBytes($downloaded) . "\n";
+                        $lastProgress = $downloaded;
+                     }
+                }
+            } elseif ($downloaded >= $lastProgress + 1024 * 1024) { // Every 1MB
+                echo "Downloaded: " . $this->formatBytes($downloaded) . "\n";
+                $lastProgress = $downloaded;
+            }
+        }
+
+        fclose($in);
+        fclose($out);
+
+        // Verify file size if known
+        if ($fileSize > 0) {
+            $actualSize = filesize($outputPath);
+            // Relaxed check: if we downloaded MORE than expected and expected was small, it was likely an LFS pointer.
+            if ($actualSize !== $fileSize) {
+                 if ($fileSize < 5000 && $actualSize > $fileSize) {
+                     echo "✓ Download completed (Size mismatch ignored: likely LFS pointer resolved to actual file).\n";
+                     echo "  Expected (LFS pointer): " . $this->formatBytes($fileSize) . "\n";
+                     echo "  Actual (GGUF file): " . $this->formatBytes($actualSize) . "\n";
+                 } else {
+                     unlink($outputPath);
+                     $this->error("Download incomplete: expected $fileSize bytes, got $actualSize bytes.");
+                 }
+            }
+        }
+    }
+
+    private function formatBytes(int $bytes, int $precision = 2): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $bytes = max($bytes, 0);
+        $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
+        $pow = min($pow, count($units) - 1);
+        $bytes /= pow(1024, $pow);
+        return round($bytes, $precision) . ' ' . $units[$pow];
+    }
+
+    private function showHelp(): void
+    {
+        echo <<<HELP
+llama.php CLI - Local LLM Interface
+
+USAGE:
+  ./bin/llama <command> [options]
+
+COMMANDS:
+  generate    Generate text from a prompt
+  chat        Single-turn chat with system message
+  embed       Generate embedding vector from text
+  interactive Multi-turn interactive chat session
+  install     Install llama.cpp binary (helper)
+  download    Download GGUF models from Hugging Face
+
+GLOBAL OPTIONS:
+  --binary PATH       Path to llama.cpp binary (auto-detected)
+  --model PATH        Path to GGUF model file (required)
+  --template NAME     Chat template (llama3, phi2, mistral, zephyr, qwen, qwen3, deepseek, gemma, chatml, falcon, commandr, vicuna)
+  --thinking          Enable thinking mode for Qwen3 models (chain-of-thought)
+  --timeout SECONDS   Process timeout (default: 60)
+  --max_tokens N      Maximum tokens to generate (default: 128)
+  --temperature F     Sampling temperature (default: 0.8)
+  --top_p F           Top-p sampling (default: 0.9)
+  --repeat_penalty F  Repeat penalty (default: 1.1)
+  --ctx_size N        Context window size (default: 512)
+  --threads N         CPU threads to use
+  --seed N            Random seed
+
+COMMAND-SPECIFIC OPTIONS:
+  generate:
+    --prompt TEXT     Prompt text (required)
+
+  chat:
+    --prompt TEXT     User message (required)
+    --system TEXT     System message
+
+  embed:
+    --text TEXT       Text to embed (required)
+
+  interactive:
+    --system TEXT     Initial system message
+
+  download:
+    --repo REPO       Hugging Face repository (owner/model-name) [required]
+    --file FILE       Specific GGUF file to download (optional)
+    --output DIR      Output directory (default: current directory)
+    --token TOKEN     Hugging Face token for private/gated models
+    --list            List available GGUF files without downloading
+
+EXAMPLES:
+  ./bin/llama generate --model model.gguf --prompt "Hello world"
+  ./bin/llama chat --model model.gguf --system "Be concise" --prompt "What is PHP?"
+  ./bin/llama embed --model embedding.gguf --text "Machine learning"
+  ./bin/llama interactive --model model.gguf
+  ./bin/llama download --repo TheBloke/Llama-2-7B-GGUF --list
+  ./bin/llama download --repo TheBloke/Llama-2-7B-GGUF --file llama-2-7b.Q4_K_M.gguf
+
+HELP;
+    }
+
+    private function error(string $message): void
+    {
+        fwrite(STDERR, "ERROR: $message\n");
+        fwrite(STDERR, "Use --help for usage information.\n");
+        exit(1);
+    }
+}
+
+// Run the CLI
+$cli = new LlamaCli();
+$cli->run($argv);

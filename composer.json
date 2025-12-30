@@ -1,0 +1,36 @@
+{
+    "name": "llama-php/llama-php",
+    "description": "A robust PHP wrapper for running local LLMs via llama.cpp",
+    "type": "library",
+    "keywords": ["llama.cpp", "llm", "ai", "machine-learning", "gguf", "embedding", "qwen"],
+    "homepage": "https://github.com/enacimie/llama-php",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/enacimie/llama-php.git"
+    },
+    "authors": [
+        {
+            "name": "Eduardo Nacimiento-García",
+            "email": "enacimie@ull.edu.es"
+        }
+    ],
+    "license": "MIT",
+    "require": {
+        "php": "^8.1",
+        "psr/log": "^1.0|^2.0|^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Llama\\": "src/"
+        }
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0",
+        "phpstan/phpstan": "^2.1"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Llama\\Tests\\": "tests/"
+        }
+    }
+}
